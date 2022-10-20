@@ -8,6 +8,6 @@ This repository contains my implementation of GPT-2 in PyTorch, which I am worki
 * [Neural Machine Translation of Rare Words with Subword Units](https://arxiv.org/pdf/1508.07909.pdf)
 
 ### Code References
-* Andrej Karpathy's [`mingpt`](https://github.com/karpathy/minGPT): Referenced for some tricks related to implementation of multi-head attention.
+* Andrej Karpathy's [`mingpt`](https://github.com/karpathy/minGPT): Referenced for some tricks related to implementation of multi-head attention. Also for BPE, borrowed pre-tokenization regex and mapping from bytes to characters (which in turn are borrowed from the [OpenAI implementation](https://github.com/openai/gpt-2)).
 * [Einops Documentation](https://einops.rocks/pytorch-examples.html): Referenced for more tricks related to multi-head attention, namely, Einstein notation.
 * Phil Wang's [ViT repository](https://github.com/lucidrains/vit-pytorch): Referenced for more attention tricks (wrapping the attention and FFN blocks in a "PreNorm" layer, which results in a much cleaner transformer block implementation).
