@@ -1,5 +1,5 @@
 # GPT-2 Implementation in PyTorch
-This repository contains my implementation of GPT-2 in PyTorch, which I am working on as a personal project to familiarize myself with recent advances in deep learning. As of now, I have trained the model on a toy task (adding numbers), but will soon attempt to train it on text corpora (e.g. the complete works of Shakespeare, Wikitext, Webtext). I am also planning to implement Byte-Pair Encoding (BPE) from scratch.
+This repository contains my implementation a GPT-2-like model in PyTorch, which I am working on as a personal project to familiarize myself with recent advances in deep learning. As of now, I have trained the model on a toy task (adding numbers), but will soon attempt to train it on text corpora (e.g. the complete works of Shakespeare, Wikitext, Webtext). I am also planning to implement Byte-Pair Encoding (BPE) from scratch.
 
 # References
 
