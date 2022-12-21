@@ -3,7 +3,7 @@ This repository contains my implementation of GPT-2 in PyTorch, which I am worki
 
 # References
 
-### Papers Implemented
+### Relevant Papers
 * [Language Models are Unsupervised Multitask Learners](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
 * [Neural Machine Translation of Rare Words with Subword Units](https://arxiv.org/pdf/1508.07909.pdf)
 
