@@ -35,15 +35,17 @@ def test_compiled_model(config_path="config/medium.yaml"):
     start = time.time()
     out1 = compiled(example_input)
     print("Forwarded first batch in", time.time() - start, "seconds")
-    
+    # delete to save memory
+    del out1
+
     print("Testing second model forward pass.")
     start = time.time()
     out2 = compiled(example_input)
     print("Forwarded second batch in", time.time() - start, "seconds")
 
-    assert out1.shape == (8, config.seq_len, config.vocab_size)
     assert out2.shape == (8, config.seq_len, config.vocab_size)
     print("Compiled model test passed.")
+    del out2
     
 
 if __name__ == "__main__":
