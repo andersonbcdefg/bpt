@@ -27,7 +27,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
     model.to(device)
     compiled = torch.compile(model, mode="default")
     print("torch.compile() ran successfully.")
-    print("Device of compiled model:", compiled.device)
+    print("Device of compiled model:", compiled.named_parameters().__next__()[1].device)
 
     print("Testing initial model forward pass.")
     example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
