@@ -3,9 +3,11 @@ import torch
 from model import GPT, GPTConfig
 
 def test_model(config_path="config/medium.yaml"):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Instantiating model from {config_path}.")
     config = GPTConfig.from_yaml(config_path)
     model = GPT(config)
+    model.to(device)
     
     print("Testing model forward pass.")
     example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
@@ -17,11 +19,14 @@ def test_model(config_path="config/medium.yaml"):
     print("Model forward pass test passed.")
 
 def test_compiled_model(config_path="config/medium.yaml"):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Instantiating model from {config_path}.")
     config = GPTConfig.from_yaml(config_path)
     model = GPT(config)
+    model.to(device)
     compiled = torch.compile(model, mode="default")
     print("torch.compile() ran successfully.")
+    print("Device of compiled model:", compiled.device)
 
     print("Testing initial model forward pass.")
     example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
