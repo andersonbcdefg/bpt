@@ -1,19 +1,47 @@
+import time
 import torch
-from model import GPT
+from model import GPT, GPTConfig
 
-config = {
-    "vocab_size": 50257, 
-    "seq_len": 512, 
-    "d_model": 512, 
-    "n_layers":6, 
-    "n_heads":8, 
-    "d_attn":64, 
-    "attn_dropout":0.1, 
-    "resid_dropout":0.1
-}
+def test_model(config_path="config/medium.yaml"):
+    print(f"Instantiating model from {config_path}.")
+    config = GPTConfig.from_yaml(config_path)
+    model = GPT(config)
+    
+    print("Testing model forward pass.")
+    example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
+    start = time.time()
+    out = model(example_input)
+    print("Forwarded in", time.time() - start, "seconds")
 
-model = GPT(config)
+    assert out.shape == (8, config.seq_len, config.vocab_size)
+    print("Model forward pass test passed.")
 
-example_input = torch.randint(0, config["vocab_size"], (1, config["seq_len"]))
-out = model(example_input)
-print(out.shape)
+def test_compiled_model(config_path="config/medium.yaml"):
+    print(f"Instantiating model from {config_path}.")
+    config = GPTConfig.from_yaml(config_path)
+    model = GPT(config)
+    compiled = torch.compile(model, mode="default")
+    print("torch.compile() ran successfully.")
+
+    print("Testing initial model forward pass.")
+    example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
+    start = time.time()
+    out1 = compiled(example_input)
+    print("Forwarded first batch in", time.time() - start, "seconds")
+    
+    print("Testing second model forward pass.")
+    start = time.time()
+    out2 = compiled(example_input)
+    print("Forwarded second batch in", time.time() - start, "seconds")
+
+    assert out1.shape == (8, config.seq_len, config.vocab_size)
+    assert out2.shape == (8, config.seq_len, config.vocab_size)
+    print("Compiled model test passed.")
+    
+
+if __name__ == "__main__":
+    test_model()
+    if torch.cuda.is_available():
+        test_compiled_model()
+    else:
+        print("Skipping compiled model test because CUDA is not available.")
