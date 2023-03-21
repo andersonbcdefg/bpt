@@ -15,6 +15,7 @@ def test_model(config_path="config/medium.yaml"):
     start = time.time()
     out1 = model(example_input)
     print("Forwarded initial batch in", time.time() - start, "seconds")
+    assert out.shape == (8, config.seq_len, config.vocab_size), "Output shape is incorrect."
     # delete to save memory
     del out1
 
@@ -24,9 +25,8 @@ def test_model(config_path="config/medium.yaml"):
         start = time.time()
         out = model(example_input)
         times.append(time.time() - start)
-    
+        del out
     print("Average forward pass time after 25 warmup batches:", sum(times[-5:]) / len(5))
-    assert out.shape == (8, config.seq_len, config.vocab_size)
     print("Model forward pass test passed.")
 
 def test_compiled_model(config_path="config/medium.yaml"):
@@ -45,6 +45,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
     start = time.time()
     out1 = compiled(example_input)
     print("Forwarded first batch in", time.time() - start, "seconds")
+    assert out1.shape == (8, config.seq_len, config.vocab_size), "Output shape is incorrect."
     # delete to save memory
     del out1
 
@@ -54,11 +55,9 @@ def test_compiled_model(config_path="config/medium.yaml"):
         start = time.time()
         out = compiled(example_input)
         times.append(time.time() - start)
-
+        del out
     print("Average forward pass time after 25 warmup batches:", sum(times[-5:]) / len(5))
-    assert out.shape == (8, config.seq_len, config.vocab_size)
     print("Compiled model test passed.")
-    del out
     
 
 if __name__ == "__main__":
