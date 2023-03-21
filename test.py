@@ -15,7 +15,7 @@ def test_model(config_path="config/medium.yaml"):
     start = time.time()
     out1 = model(example_input)
     print("Forwarded initial batch in", time.time() - start, "seconds")
-    assert out.shape == (8, config.seq_len, config.vocab_size), "Output shape is incorrect."
+    assert out1.shape == (8, config.seq_len, config.vocab_size), "Output shape is incorrect."
     # delete to save memory
     del out1
 
