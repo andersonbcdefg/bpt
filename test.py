@@ -11,7 +11,7 @@ def test_model(config_path="config/medium.yaml"):
     
     print("Testing model forward pass.")
     example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
-    example_input.to(device)
+    example_input = example_input.to(device)
     start = time.time()
     out = model(example_input)
     print("Forwarded in", time.time() - start, "seconds")
@@ -31,7 +31,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
 
     print("Testing initial model forward pass.")
     example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
-    example_input.to(device)
+    example_input = example_input.to(device)
     start = time.time()
     out1 = compiled(example_input)
     print("Forwarded first batch in", time.time() - start, "seconds")
