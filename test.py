@@ -26,7 +26,7 @@ def test_model(config_path="config/medium.yaml"):
         out = model(example_input)
         times.append(time.time() - start)
         del out
-    print("Average forward pass time after 25 warmup batches:", sum(times[-5:]) / len(5))
+    print("Average forward pass time after 25 warmup batches:", sum(times[-5:]) / 5.0)
     print("Model forward pass test passed.")
 
 def test_compiled_model(config_path="config/medium.yaml"):
@@ -56,7 +56,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
         out = compiled(example_input)
         times.append(time.time() - start)
         del out
-    print("Average forward pass time after 25 warmup batches:", sum(times[-5:]) / len(5))
+    print("Average forward pass time after 25 warmup batches:", sum(times[-5:]) / 5.0)
     print("Compiled model test passed.")
     
 
