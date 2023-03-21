@@ -60,6 +60,7 @@ def run_forward_passes(config, model, device, num_passes=1000):
         random_tensor = random_tensor.to(device)
         out, time = timed(lambda: model(random_tensor))
         times.append(time)
+        del out
     return times
 
 def test_compiled_speedup(config_path="config/medium.yaml"):
