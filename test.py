@@ -28,7 +28,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
     config = GPTConfig.from_yaml(config_path)
     model = GPT(config)
     model.to(device)
-    compiled = torch.compile(model, mode="reduce-overhead")
+    compiled = torch.compile(model, mode="max-autotune")
     print("torch.compile() ran successfully.")
     print("Device of compiled model:", compiled.named_parameters().__next__()[1].device)
 
@@ -70,7 +70,7 @@ def test_compiled_speedup(config_path="config/medium.yaml"):
     config = GPTConfig.from_yaml(config_path)
     model = GPT(config)
     model.to(device)
-    compiled = torch.compile(model, mode="reduce-overhead")
+    compiled = torch.compile(model, mode="max-autotune")
     print("torch.compile() ran successfully.")
     
     # Run forward passes on normal model
