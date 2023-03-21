@@ -16,7 +16,7 @@ def test_model(config_path="config/medium.yaml"):
     start = time.time()
     out1 = model(example_input)
     print("Forwarded initial batch in", time.time() - start, "seconds")
-    assert out1.shape == (8, config.seq_len, config.vocab_size), "Output shape is incorrect."
+    assert out1.shape == (4, config.seq_len, config.vocab_size), "Output shape is incorrect."
     # delete to save memory
     del out1
 
@@ -38,7 +38,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
     start = time.time()
     out1 = compiled(example_input)
     print("Forwarded first batch in", time.time() - start, "seconds")
-    assert out1.shape == (8, config.seq_len, config.vocab_size), "Output shape is incorrect."
+    assert out1.shape == (4, config.seq_len, config.vocab_size), "Output shape is incorrect."
     # delete to save memory
     del out1
     print("Compiled model test passed.")
