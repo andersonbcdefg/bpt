@@ -11,7 +11,7 @@ def test_model(config_path="config/medium.yaml"):
     model.to(device)
     
     print("Testing model forward pass.")
-    example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
+    example_input = torch.randint(0, config.vocab_size, (4, config.seq_len))
     example_input = example_input.to(device)
     start = time.time()
     out1 = model(example_input)
@@ -33,7 +33,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
     print("Device of compiled model:", compiled.named_parameters().__next__()[1].device)
 
     print("Testing initial model forward pass.")
-    example_input = torch.randint(0, config.vocab_size, (8, config.seq_len))
+    example_input = torch.randint(0, config.vocab_size, (4, config.seq_len))
     example_input = example_input.to(device)
     start = time.time()
     out1 = compiled(example_input)
@@ -70,7 +70,7 @@ def test_compiled_speedup(config_path="config/medium.yaml"):
     config = GPTConfig.from_yaml(config_path)
     model = GPT(config)
     model.to(device)
-    compiled = torch.compile(model, mode="default")
+    compiled = torch.compile(model, mode="reduce-overhead")
     print("torch.compile() ran successfully.")
     
     # Run forward passes on normal model
