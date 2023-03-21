@@ -5,7 +5,7 @@ d_model: 1024
 d_ffn: 4096
 d_qkv: 64
 n_heads: 16
-n_layers: 26
+n_layers: 20
 attn_dropout: 0.0
 dropout: 0.0
 tie_weights: False # might not play nice with torch.compile
