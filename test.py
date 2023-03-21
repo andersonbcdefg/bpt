@@ -28,7 +28,7 @@ def test_compiled_model(config_path="config/medium.yaml"):
     config = GPTConfig.from_yaml(config_path)
     model = GPT(config)
     model.to(device)
-    compiled = torch.compile(model, mode="default")
+    compiled = torch.compile(model, mode="reduce-overhead")
     print("torch.compile() ran successfully.")
     print("Device of compiled model:", compiled.named_parameters().__next__()[1].device)
 
@@ -53,7 +53,7 @@ def timed(fn):
     torch.cuda.synchronize()
     return result, start.elapsed_time(end) / 1000
 
-def run_forward_passes(config, model, device, num_passes=1000):
+def run_forward_passes(config, model, device, num_passes=100):
     times = []
     for i in tqdm(range(num_passes)):
         random_tensor = torch.randint(0, config.vocab_size, (4, config.seq_len))
