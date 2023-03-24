@@ -1,3 +1,9 @@
 *.pth
 __pycache__
 .DS_Store
+.python-version
+**.jsonl
+
+# these are not public per LLaMA license!
+tokenizer.model
+tokenizer_checklist.chk

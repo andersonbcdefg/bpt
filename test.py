@@ -2,6 +2,7 @@ import time
 import torch
 from tqdm.auto import tqdm
 from model import GPT, GPTConfig
+from data.prepare_data import get_dataloader
 
 def test_model(config_path="config/medium.yaml"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -87,10 +88,21 @@ def test_compiled_speedup(config_path="config/medium.yaml"):
     compiled_times = run_forward_passes(config, compiled, device)
     print(torch.mean(torch.tensor(compiled_times)).item())
     
+def test_dataloader():
+    loader = get_dataloader()
+    i = 0
+    for X, Y in loader:
+        print(X.shape, Y.shape)
+        i += 1
+        if i > 10:
+            break
+        
+
 if __name__ == "__main__":
-    test_model()
+    #test_model()
     if torch.cuda.is_available():
         test_compiled_model()
         test_compiled_speedup()
     else:
         print("Skipping compiled model tests because CUDA is not available.")
+    test_dataloader()
