@@ -19,13 +19,9 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.utils.checkpoint
 from torch import nn
-<<<<<<< HEAD
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 import bitsandbytes as bnb
-=======
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
->>>>>>> 202fd68957540f97a04388609a3ee6196025ece8
 from transformers import PreTrainedModel
 from transformers import GPTNeoXConfig
 from transformers.modeling_outputs import (
