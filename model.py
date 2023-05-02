@@ -28,7 +28,6 @@ class GPTConfig:
     if self.d_qkv != self.d_model // self.n_heads:
       warnings.warn("d_qkv is not equal to d_model // n_heads. This is ok, but unusual.")
 
-
   @classmethod
   def from_yaml(cls, path):
     with open(path, 'r') as f:
@@ -41,20 +40,20 @@ class GPTConfig:
     return yaml.dump(self.__dict__)
 
 class RMSNorm(nn.Module):
-    """Root Mean Square Layer Normalization.
-    Derived from https://github.com/bzhangGo/rmsnorm/blob/master/rmsnorm_torch.py. BSD 3-Clause License:
-    https://github.com/bzhangGo/rmsnorm/blob/master/LICENSE.
-    """
-    def __init__(self, size: int, dim: int = -1, eps: float = 1e-5) -> None:
-        super().__init__()
-        self.scale = nn.Parameter(torch.ones(size))
-        self.eps = eps
-        self.dim = dim
+  def __init__(self, dim, eps = 1e-8):
+    super().__init__()
+    self.scale = dim ** -0.5
+    self.eps = eps
+    self.g = nn.Parameter(torch.ones(dim))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm_x = torch.mean(x * x, dim=self.dim, keepdim=True)
-        x_normed = x * torch.rsqrt(norm_x + self.eps)
-        return self.scale * x_normed
+  def forward(self, x):
+    norm = torch.norm(x, dim = -1, keepdim = True) * self.scale
+    return x / norm.clamp(min = self.eps) * self.g
+
+def pad_at_dim(t, pad, dim = -1, value = 0.):
+    dims_from_right = (- dim - 1) if dim < 0 else (t.ndim - dim - 1)
+    zeros = ((0, 0) * dims_from_right)
+    return F.pad(t, (*zeros, *pad), value = value)
 
 class CausalAttention(nn.Module):
   def __init__(self, config, rotary_emb=None):
@@ -67,7 +66,12 @@ class CausalAttention(nn.Module):
 
   def forward(self, X):
     Q, K, V = rearrange(self.W_qkv(X), "b l (h ddd) -> b h l ddd", ddd=(3 * self.d_qkv)).chunk(3, dim=-1) # b, h, l, d_attn
-    Q, K = self.rotary_emb.rotate_queries_and_keys(Q, K) if self.rotary_emb is not None else (Q, K)
+    # Q, K = self.rotary_emb.rotate_queries_and_keys(Q, K) if self.rotary_emb is not None else (Q, K)
+    if self.rotary_emb is not None:
+      Q = self.rotary_emb.rotate_queries_or_keys(Q)
+      K = self.rotary_emb.rotate_queries_or_keys(K)
+    # check_nan(Q, "Q")
+    # check_nan(K, "K")
     attn_out = F.scaled_dot_product_attention(Q, K, V, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
     return self.out_proj(attn_out.flatten(2, 3))
 
@@ -91,7 +95,15 @@ class ParallelTransformerBlock(nn.Module):
     self.ffn = FFN(config)
 
   def forward(self, X):
-    return X + self.ffn(self.ln2(X)) + self.attn(self.ln1(X))
+    attn_out = self.attn(self.ln1(X))
+    # check_nan(attn_out, "attn_out")
+    ffn_out = self.ffn(self.ln2(X))
+    # check_nan(ffn_out, "ffn_out")
+    return X + attn_out + ffn_out
+
+def check_nan(tensor, label):
+    if torch.isnan(tensor).any():
+      print(f"{label} contains {torch.mean(torch.isnan(tensor).float())} NaN values")
 
 class GPT(nn.Module):
   def __init__(self, config):
@@ -102,7 +114,7 @@ class GPT(nn.Module):
     else:
       self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
     if config.rotary_emb:
-      self.rotary_emb = RotaryEmbedding(dim = int(math.floor(config.d_qkv * config.rotary_pct)), use_xpos = True)
+      self.rotary_emb = RotaryEmbedding(dim = int(config.d_qkv * config.rotary_pct), use_xpos = False)
     else:
       self.rotary_emb = None
     self.transformer = nn.Sequential(*[ParallelTransformerBlock(config, self.rotary_emb) for _ in range(config.n_layers)])
@@ -123,19 +135,52 @@ class GPT(nn.Module):
       n_params -= self.lm_head.weight.numel()
     print("Number of parameters: ~%.0fM" % (n_params/1e6,))
 
+    self.apply(self._init_weights)
+
+  def _init_weights(self, module):
+    if isinstance(module, nn.Linear):
+      nn.init.xavier_normal_(module.weight)
+    elif isinstance(module, nn.Embedding):
+      nn.init.xavier_normal_(module.weight, gain=0.5)
+    if isinstance(module, nn.Linear) and module.bias is not None:
+      module.bias.data.zero_()
+
   def forward(self, X, targets=None):
     X = self.token_emb(X)
-    X = self.transformer(X)
+    # check_nan(X, "Token embeddings")
+
+    for i, layer in enumerate(self.transformer):
+        X = layer(X)
+        # check_nan(X, f"Transformer layer {i+1}")
+
     X = self.norm(X)
-    logits =  self.lm_head(X)
+    # check_nan(X, "Normalization")
+
+    logits = self.lm_head(X)
+    # check_nan(logits, "Logits")
+
     if targets is not None:
       loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100)
+      # check_nan(loss, "Loss")
       return loss
-    return logits   
+
+    return logits
+
+
+  # def forward(self, X, targets=None):
+  #   X = self.token_emb(X)
+  #   X = self.transformer(X)
+  #   X = self.norm(X)
+  #   logits =  self.lm_head(X)
+  #   if targets is not None:
+  #     loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100)
+  #     return loss
+  #   return logits   
   
 if __name__ == "__main__":
   config = GPTConfig.from_yaml("config/medium.yaml")
   model = GPT(config)
-  print(model)
+  # print(model)
   X = torch.randint(0, config.vocab_size, (2, 128))
-  print(model(X).shape)
+  loss = model(X, targets=X)
+  print(loss)
