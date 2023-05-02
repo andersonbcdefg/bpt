@@ -1,13 +1,13 @@
 # target size is ~500M parameters. don't decrease hidden size for GLU.
-vocab_size: 32768
+vocab_size: 50304
 seq_len: 512
-d_model: 1024
-d_ffn: 4096
-d_qkv: 64
+d_model: 2048
+d_ffn: 5120
+d_qkv: 128
 n_heads: 16
-n_layers: 26
-attn_dropout: 0.0
+n_layers: 24
 dropout: 0.0
-tie_weights: False # might not play nice with torch.compile
-emb_scale_factor: 1.0
-weight_init_scale: 0.01
+tie_weights: True # might not play nice with torch.compile but who cares
+rotary_emb: True
+stable_embedding: False
+rotary_pct: 0.25
