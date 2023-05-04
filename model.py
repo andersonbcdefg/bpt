@@ -9,6 +9,10 @@ from torch.nn import functional as F
 from einops import rearrange
 from dataclasses import dataclass
 
+def check_nan(tensor, label):
+    if torch.isnan(tensor).any():
+      print(f"{label} contains {torch.mean(torch.isnan(tensor).float())} NaN values")
+
 @dataclass
 class GPTConfig:
   vocab_size: int
@@ -50,10 +54,6 @@ class RMSNorm(nn.Module):
     norm = torch.norm(x, dim = -1, keepdim = True) * self.scale
     return x / norm.clamp(min = self.eps) * self.g
 
-def pad_at_dim(t, pad, dim = -1, value = 0.):
-    dims_from_right = (- dim - 1) if dim < 0 else (t.ndim - dim - 1)
-    zeros = ((0, 0) * dims_from_right)
-    return F.pad(t, (*zeros, *pad), value = value)
 
 class CausalAttention(nn.Module):
   def __init__(self, config, rotary_emb=None):
@@ -100,10 +100,42 @@ class ParallelTransformerBlock(nn.Module):
     ffn_out = self.ffn(self.ln2(X))
     # check_nan(ffn_out, "ffn_out")
     return X + attn_out + ffn_out
+  
+class FusedParallelTransformerBlock(nn.Module):
+  def __init__(self, config, rotary_emb = None):
+    super().__init__()
+    self.ln = RMSNorm(config.d_model)
+    self.dense = nn.Linear(config.d_model, config.d_qkv * config.n_heads * 3 + config.d_ffn * 2)
+    self.dropout_p = config.dropout
+    self.attn_out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
+    self.ffn_out_proj = nn.Linear(config.d_ffn, config.d_model, bias=False)
 
-def check_nan(tensor, label):
-    if torch.isnan(tensor).any():
-      print(f"{label} contains {torch.mean(torch.isnan(tensor).float())} NaN values")
+  def forward(self, x):
+    normed = self.ln(x)
+    # apply dense layer to x then split into q, k, v, a, b (not all the same size!)
+    # this is the "fused" bit that might save time, idk
+    q, k, v, a, b = self.dense(normed).split([
+      config.d_qkv * config.n_heads, 
+      config.d_qkv * config.n_heads, 
+      config.d_qkv * config.n_heads, 
+      config.d_ffn, 
+      config.d_ffn
+    ], dim=-1)
+    # split heads
+    q, k, v = map(lambda t: rearrange(t, "b l (h d) -> b h l d", h=config.n_heads), (q, k, v))
+    # apply rotary embedding to q and k
+    if self.rotary_emb is not None:
+      q = self.rotary_emb.rotate_queries_or_keys(q)
+      k = self.rotary_emb.rotate_queries_or_keys(k)
+    # apply attention
+    attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
+    
+    return x + self.attn_out_proj(attn_out.flatten(2, 3)) + self.ffn_out_proj(a * F.silu(b))
+
+
+
+
+
 
 class GPT(nn.Module):
   def __init__(self, config):
