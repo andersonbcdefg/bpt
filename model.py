@@ -237,4 +237,5 @@ if __name__ == "__main__":
   # print(model)
   X = torch.randint(0, config.vocab_size, (2, 128))
   loss = model(X, targets=X)
-  print(loss)
+  loss.backward()
+  print(model.token_emb.weight.grad)
