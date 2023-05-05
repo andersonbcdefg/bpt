@@ -1,8 +1,7 @@
 import yaml
 import warnings
-import math
 import bitsandbytes as bnb
-from rotary_embedding_torch import RotaryEmbedding
+from rotary_embedding import RotaryEmbedding, apply_rotary_pos_emb
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -24,9 +23,13 @@ class GPTConfig:
   n_layers: int
   dropout: float
   tie_weights: bool
+  fused_transformer_block: bool = True
   rotary_emb: bool = True
-  stable_embedding: bool = False
   rotary_pct: float = 0.25
+  use_xpos: bool = True
+  xpos_scale_base: int = 512
+  stable_embedding: bool = False
+  
 
   def __post_init__(self):
     if self.d_qkv != self.d_model // self.n_heads:
@@ -54,22 +57,37 @@ class RMSNorm(nn.Module):
     norm = torch.norm(x, dim = -1, keepdim = True) * self.scale
     return x / norm.clamp(min = self.eps) * self.g
 
-
 class CausalAttention(nn.Module):
-  def __init__(self, config, rotary_emb=None):
+  def __init__(self, config):
     super().__init__()
     self.W_qkv = nn.Linear(config.d_model, config.n_heads * config.d_qkv * 3, bias=False)
-    self.rotary_emb = rotary_emb
+    self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
     self.dropout_p = config.dropout
     self.out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
     self.d_qkv = config.d_qkv
 
+    self.register_buffer("pos_emb", None, persistent=False)
+    self.register_buffer("pos_emb_scale", None, persistent=False)
+
+  def get_rotary_embedding(self, n, device):
+    if self.pos_emb is not None and self.pos_emb.shape[-2] >= n:
+      return self.pos_emb[:n], self.pos_emb_scale[:n]
+
+    pos_emb, scale = self.rotary_emb(n, device=device)
+    self.register_buffer("pos_emb", pos_emb, persistent=False)
+    self.register_buffer("pos_emb_scale", scale, persistent=False)
+    return pos_emb, scale
+  
   def forward(self, X):
+    seq_len, device = X.shape[1], X.device
     Q, K, V = rearrange(self.W_qkv(X), "b l (h ddd) -> b h l ddd", ddd=(3 * self.d_qkv)).chunk(3, dim=-1) # b, h, l, d_attn
     # Q, K = self.rotary_emb.rotate_queries_and_keys(Q, K) if self.rotary_emb is not None else (Q, K)
-    if self.rotary_emb is not None:
-      Q = self.rotary_emb.rotate_queries_or_keys(Q)
-      K = self.rotary_emb.rotate_queries_or_keys(K)
+    
+    positions, scale = self.get_rotary_embedding(seq_len, device)
+
+    Q = apply_rotary_pos_emb(positions, Q, scale)
+    K = apply_rotary_pos_emb(positions, K, scale ** -1)
+    
     # check_nan(Q, "Q")
     # check_nan(K, "K")
     attn_out = F.scaled_dot_product_attention(Q, K, V, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
@@ -87,10 +105,10 @@ class FFN(nn.Module):
     return self.fc2(a * F.silu(b))
 
 class ParallelTransformerBlock(nn.Module):
-  def __init__(self, config, rotary_emb=None):
+  def __init__(self, config):
     super().__init__()
     self.ln1 = RMSNorm(config.d_model)
-    self.attn = CausalAttention(config, rotary_emb=rotary_emb)
+    self.attn = CausalAttention(config)
     self.ln2 = RMSNorm(config.d_model)
     self.ffn = FFN(config)
 
@@ -102,15 +120,29 @@ class ParallelTransformerBlock(nn.Module):
     return X + attn_out + ffn_out
   
 class FusedParallelTransformerBlock(nn.Module):
-  def __init__(self, config, rotary_emb = None):
+  def __init__(self, config):
     super().__init__()
     self.ln = RMSNorm(config.d_model)
     self.dense = nn.Linear(config.d_model, config.d_qkv * config.n_heads * 3 + config.d_ffn * 2)
+    self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
     self.dropout_p = config.dropout
     self.attn_out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
     self.ffn_out_proj = nn.Linear(config.d_ffn, config.d_model, bias=False)
 
+    self.register_buffer("pos_emb", None, persistent=False)
+    self.register_buffer("pos_emb_scale", None, persistent=False)
+
+  def get_rotary_embedding(self, n, device):
+    if self.pos_emb is not None and self.pos_emb.shape[-2] >= n:
+      return self.pos_emb[:n], self.pos_emb_scale[:n]
+
+    pos_emb, scale = self.rotary_emb(n, device=device)
+    self.register_buffer("pos_emb", pos_emb, persistent=False)
+    self.register_buffer("pos_emb_scale", scale, persistent=False)
+    return pos_emb, scale
+
   def forward(self, x):
+    seq_len, device = x.shape[1], x.device
     normed = self.ln(x)
     # apply dense layer to x then split into q, k, v, a, b (not all the same size!)
     # this is the "fused" bit that might save time, idk
@@ -123,18 +155,14 @@ class FusedParallelTransformerBlock(nn.Module):
     ], dim=-1)
     # split heads
     q, k, v = map(lambda t: rearrange(t, "b l (h d) -> b h l d", h=config.n_heads), (q, k, v))
-    # apply rotary embedding to q and k
-    if self.rotary_emb is not None:
-      q = self.rotary_emb.rotate_queries_or_keys(q)
-      k = self.rotary_emb.rotate_queries_or_keys(k)
+    # apply rotary embedding to q and k (or a fraction of them)
+    positions, scale = self.get_rotary_embedding(seq_len, device)
+    q = apply_rotary_pos_emb(positions, q, scale)
+    k = apply_rotary_pos_emb(positions, k, scale ** -1)
     # apply attention
     attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
     
     return x + self.attn_out_proj(attn_out.flatten(2, 3)) + self.ffn_out_proj(a * F.silu(b))
-
-
-
-
 
 
 class GPT(nn.Module):
@@ -145,11 +173,7 @@ class GPT(nn.Module):
       self.token_emb = bnb.nn.StableEmbedding(config.vocab_size, config.d_model)
     else:
       self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
-    if config.rotary_emb:
-      self.rotary_emb = RotaryEmbedding(dim = int(config.d_qkv * config.rotary_pct), use_xpos = False)
-    else:
-      self.rotary_emb = None
-    self.transformer = nn.Sequential(*[ParallelTransformerBlock(config, self.rotary_emb) for _ in range(config.n_layers)])
+    self.transformer = nn.Sequential(*[ParallelTransformerBlock(config) for _ in range(config.n_layers)])
     self.norm = RMSNorm(config.d_model)
     self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
     if config.tie_weights:
@@ -161,8 +185,6 @@ class GPT(nn.Module):
                     sum(p.numel() for p in self.norm.parameters()) +
                     sum(p.numel() for p in self.lm_head.parameters())
     )
-    if self.rotary_emb is not None:
-      n_params += sum(p.numel() for p in self.rotary_emb.parameters())
     if config.tie_weights:
       n_params -= self.lm_head.weight.numel()
     print("Number of parameters: ~%.0fM" % (n_params/1e6,))
