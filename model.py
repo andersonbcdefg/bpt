@@ -8,9 +8,6 @@ from torch.nn import functional as F
 from einops import rearrange
 from dataclasses import dataclass
 
-def check_nan(tensor, label):
-    if torch.isnan(tensor).any():
-      print(f"{label} contains {torch.mean(torch.isnan(tensor).float())} NaN values")
 
 @dataclass
 class GPTConfig:
@@ -78,18 +75,13 @@ class CausalAttention(nn.Module):
     self.register_buffer("pos_emb_scale", scale, persistent=False)
     return pos_emb, scale
   
-  def forward(self, X):
-    seq_len, device = X.shape[1], X.device
-    Q, K, V = rearrange(self.W_qkv(X), "b l (h ddd) -> b h l ddd", ddd=(3 * self.d_qkv)).chunk(3, dim=-1) # b, h, l, d_attn
-    # Q, K = self.rotary_emb.rotate_queries_and_keys(Q, K) if self.rotary_emb is not None else (Q, K)
-    
+  def forward(self, x):
+    seq_len, device = x.shape[1], X.device
+    Q, K, V = rearrange(self.W_qkv(x), "b l (h ddd) -> b h l ddd", ddd=(3 * self.d_qkv)).chunk(3, dim=-1) # b, h, l, d_attn
     positions, scale = self.get_rotary_embedding(seq_len, device)
 
     Q = apply_rotary_pos_emb(positions, Q, scale)
     K = apply_rotary_pos_emb(positions, K, scale ** -1)
-    
-    # check_nan(Q, "Q")
-    # check_nan(K, "K")
     attn_out = F.scaled_dot_product_attention(Q, K, V, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
     return self.out_proj(attn_out.flatten(2, 3))
 
@@ -97,8 +89,8 @@ class CausalAttention(nn.Module):
 class FFN(nn.Module):
   def __init__(self, config):
     super().__init__()
-    self.fc1 = nn.Linear(config.d_model, config.d_ffn * 2)
-    self.fc2 = nn.Linear(config.d_ffn, config.d_model)
+    self.fc1 = nn.Linear(config.d_model, config.d_ffn * 2, bias=False)
+    self.fc2 = nn.Linear(config.d_ffn, config.d_model, bias=False)
 
   def forward(self, X):
     a, b = self.fc1(X).chunk(2, dim=-1)
@@ -112,18 +104,16 @@ class ParallelTransformerBlock(nn.Module):
     self.ln2 = RMSNorm(config.d_model)
     self.ffn = FFN(config)
 
-  def forward(self, X):
-    attn_out = self.attn(self.ln1(X))
-    # check_nan(attn_out, "attn_out")
-    ffn_out = self.ffn(self.ln2(X))
-    # check_nan(ffn_out, "ffn_out")
-    return X + attn_out + ffn_out
+  def forward(self, x):
+    attn_out = self.attn(self.ln1(x))
+    ffn_out = self.ffn(self.ln2(x))
+    return x + attn_out + ffn_out
   
 class FusedParallelTransformerBlock(nn.Module):
   def __init__(self, config):
     super().__init__()
     self.ln = RMSNorm(config.d_model)
-    self.dense = nn.Linear(config.d_model, config.d_qkv * config.n_heads * 3 + config.d_ffn * 2)
+    self.dense = nn.Linear(config.d_model, config.d_qkv * config.n_heads * 3 + config.d_ffn * 2, bias=False)
     self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
     self.dropout_p = config.dropout
     self.attn_out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
@@ -144,8 +134,7 @@ class FusedParallelTransformerBlock(nn.Module):
   def forward(self, x):
     seq_len, device = x.shape[1], x.device
     normed = self.ln(x)
-    # apply dense layer to x then split into q, k, v, a, b (not all the same size!)
-    # this is the "fused" bit that might save time, idk
+    # apply dense layer to x then split into q, k, v, a, b
     q, k, v, a, b = self.dense(normed).split([
       config.d_qkv * config.n_heads, 
       config.d_qkv * config.n_heads, 
@@ -155,7 +144,7 @@ class FusedParallelTransformerBlock(nn.Module):
     ], dim=-1)
     # split heads
     q, k, v = map(lambda t: rearrange(t, "b l (h d) -> b h l d", h=config.n_heads), (q, k, v))
-    # apply rotary embedding to q and k (or a fraction of them)
+    # apply rotary embedding
     positions, scale = self.get_rotary_embedding(seq_len, device)
     q = apply_rotary_pos_emb(positions, q, scale)
     k = apply_rotary_pos_emb(positions, k, scale ** -1)
@@ -173,7 +162,10 @@ class GPT(nn.Module):
       self.token_emb = bnb.nn.StableEmbedding(config.vocab_size, config.d_model)
     else:
       self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
-    self.transformer = nn.Sequential(*[ParallelTransformerBlock(config) for _ in range(config.n_layers)])
+    if config.fused_transformer_block:
+      self.transformer = nn.Sequential(*[FusedParallelTransformerBlock(config) for _ in range(config.n_layers)])
+    else:
+      self.transformer = nn.Sequential(*[ParallelTransformerBlock(config) for _ in range(config.n_layers)])
     self.norm = RMSNorm(config.d_model)
     self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
     if config.tie_weights:
@@ -196,40 +188,20 @@ class GPT(nn.Module):
       nn.init.xavier_normal_(module.weight)
     elif isinstance(module, nn.Embedding):
       nn.init.xavier_normal_(module.weight, gain=0.5)
-    if isinstance(module, nn.Linear) and module.bias is not None:
+    if isinstance(module, nn.Linear) and module.bias is not None and module.bias is not False:
       module.bias.data.zero_()
 
-  def forward(self, X, targets=None):
-    X = self.token_emb(X)
-    # check_nan(X, "Token embeddings")
+  def forward(self, x, targets=None):
+    x = self.token_emb(x)
 
-    for i, layer in enumerate(self.transformer):
-        X = layer(X)
-        # check_nan(X, f"Transformer layer {i+1}")
-
-    X = self.norm(X)
-    # check_nan(X, "Normalization")
-
-    logits = self.lm_head(X)
-    # check_nan(logits, "Logits")
-
+    for _, layer in enumerate(self.transformer):
+      x = layer(x)
+    x = self.norm(x)
+    logits = self.lm_head(x)
     if targets is not None:
       loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100)
-      # check_nan(loss, "Loss")
       return loss
-
-    return logits
-
-
-  # def forward(self, X, targets=None):
-  #   X = self.token_emb(X)
-  #   X = self.transformer(X)
-  #   X = self.norm(X)
-  #   logits =  self.lm_head(X)
-  #   if targets is not None:
-  #     loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100)
-  #     return loss
-  #   return logits   
+    return logits 
   
 if __name__ == "__main__":
   config = GPTConfig.from_yaml("config/medium.yaml")
