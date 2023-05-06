@@ -183,7 +183,7 @@ class FusedParallelTransformerBlock(nn.Module):
       self.config.d_ffn
     ], dim=-1)
     # split heads
-    q, k, v = map(lambda t: rearrange(t, "b l (h d) -> b h l d", h=config.n_heads), (q, k, v))
+    q, k, v = map(lambda t: rearrange(t, "b l (h d) -> b h l d", h=self.config.n_heads), (q, k, v))
     # apply rotary embedding
     positions, scale = self.get_rotary_embedding(seq_len, device)
     q = apply_rotary_pos_emb(positions, q, scale)
