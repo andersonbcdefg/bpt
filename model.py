@@ -8,7 +8,6 @@ from torch.nn import functional as F
 from einops import rearrange
 from dataclasses import dataclass
 
-
 @dataclass
 class GPTConfig:
   vocab_size: int
