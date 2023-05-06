@@ -151,6 +151,7 @@ class ParallelTransformerBlock(nn.Module):
 class FusedParallelTransformerBlock(nn.Module):
   def __init__(self, config):
     super().__init__()
+    self.config = config
     self.ln = RMSNorm(config.d_model)
     self.dense = nn.Linear(config.d_model, config.d_qkv * config.n_heads * 3 + config.d_ffn * 2, bias=False)
     self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
@@ -175,11 +176,11 @@ class FusedParallelTransformerBlock(nn.Module):
     normed = self.ln(x)
     # apply dense layer to x then split into q, k, v, a, b
     q, k, v, a, b = self.dense(normed).split([
-      config.d_qkv * config.n_heads, 
-      config.d_qkv * config.n_heads, 
-      config.d_qkv * config.n_heads, 
-      config.d_ffn, 
-      config.d_ffn
+      self.config.d_qkv * self.config.n_heads, 
+      self.config.d_qkv * self.config.n_heads, 
+      self.config.d_qkv * self.config.n_heads, 
+      self.config.d_ffn, 
+      self.config.d_ffn
     ], dim=-1)
     # split heads
     q, k, v = map(lambda t: rearrange(t, "b l (h d) -> b h l d", h=config.n_heads), (q, k, v))
