@@ -21,6 +21,7 @@ import torch.utils.checkpoint
 from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
+from einops import rearrange
 import bitsandbytes as bnb
 from transformers import PreTrainedModel
 from transformers import GPTNeoXConfig
@@ -67,6 +68,57 @@ class GPTNeoXPreTrainedModel(PreTrainedModel):
             module.gradient_checkpointing = value
 
 
+class RMSNorm(nn.Module):
+  def __init__(self, dim, eps = 1e-8):
+    super().__init__()
+    self.scale = dim ** -0.5
+    self.eps = eps
+    self.g = nn.Parameter(torch.ones(dim))
+
+  def forward(self, x):
+    norm = torch.norm(x, dim = -1, keepdim = True) * self.scale
+    return x / norm.clamp(min = self.eps) * self.g
+
+## Rotary embedding adapted from Phil Wang (lucidrains) Github repo `palm_rlhf_pytorch`.
+# I modify the apply_rotary_pos_emb function to allow rotating only a fraction of the input tensor.
+@torch.jit.script
+def rotate_half(x):
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+@torch.jit.script
+def apply_rotary_pos_emb(pos, t, scale):
+    num_rot, d_qkv = pos.shape[-1], t.shape[-1]
+    t_rot, t_keep = t.split((num_rot, d_qkv - num_rot), dim=-1)
+    rotated = (t_rot * pos.cos() * scale) + (rotate_half(t_rot) * pos.sin() * scale)
+    return torch.cat((rotated, t_keep), dim=-1)
+
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim, scale_base = 512, use_xpos = True):
+        super().__init__()
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+
+        self.use_xpos = use_xpos
+        self.scale_base = scale_base
+        scale = (torch.arange(0, dim, 2) + 0.4 * dim) / (1.4 * dim)
+        self.register_buffer('scale', scale)
+
+    def forward(self, seq_len, device):
+        t = torch.arange(seq_len, device = device).type_as(self.inv_freq)
+        freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
+        freqs = torch.cat((freqs, freqs), dim = -1)
+
+        if not self.use_xpos:
+            return freqs, torch.ones(1, device = device)
+
+        power = (t - (seq_len // 2)) / self.scale_base
+        scale = self.scale ** rearrange(power, 'n -> n 1')
+        scale = torch.cat((scale, scale), dim = -1)
+
+        return freqs, scale
+
+
 class GPTNeoXAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -82,9 +134,7 @@ class GPTNeoXAttention(nn.Module):
             ),
         )
         self.register_buffer("masked_bias", torch.tensor(-1e9))
-        self.rotary_emb = RotaryEmbedding(
-            self.rotary_ndims, config.max_position_embeddings, base=config.rotary_emb_base
-        )
+        self.rotary_emb = RotaryEmbedding(int(config.head_size * config.rotary_pct), scale_base=512, use_xpos=True)
         self.register_buffer(
             "norm_factor",
             torch.sqrt(torch.tensor(self.head_size, dtype=torch.float32)).to(torch.get_default_dtype()),
@@ -92,6 +142,9 @@ class GPTNeoXAttention(nn.Module):
         )
         self.query_key_value = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=False)
         self.dense = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+
+        self.register_buffer("pos_emb", None, persistent=False)
+        self.register_buffer("pos_emb_scale", None, persistent=False)
 
     def forward(
         self,
@@ -121,19 +174,22 @@ class GPTNeoXAttention(nn.Module):
         value = qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
 
         # Compute rotary embeddings on rotary_ndims
-        query_rot = query[..., : self.rotary_ndims]
-        query_pass = query[..., self.rotary_ndims :]
-        key_rot = key[..., : self.rotary_ndims]
-        key_pass = key[..., self.rotary_ndims :]
+        # query_rot = query[..., : self.rotary_ndims]
+        # query_pass = query[..., self.rotary_ndims :]
+        # key_rot = key[..., : self.rotary_ndims]
+        # key_pass = key[..., self.rotary_ndims :]
 
         # Compute token offset for rotary embeddings (when decoding)
-        seq_len = key.shape[-2]
+        seq_len, device = key.shape[-2], key.device
         if has_layer_past:
             seq_len += layer_past[0].shape[-2]
-        cos, sin = self.rotary_emb(value, seq_len=seq_len)
-        query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
-        query = torch.cat((query, query_pass), dim=-1)
-        key = torch.cat((key, key_pass), dim=-1)
+        # cos, sin = self.rotary_emb(value, seq_len=seq_len)
+        # query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
+        # query = torch.cat((query, query_pass), dim=-1)
+        # key = torch.cat((key, key_pass), dim=-1)
+        positions, scale = self.get_rotary_embedding(seq_len, device)
+        query = apply_rotary_pos_emb(positions, query, scale)
+        key = apply_rotary_pos_emb(positions, key, scale ** -1)
 
         # Cache QKV values
         if has_layer_past:
@@ -155,6 +211,15 @@ class GPTNeoXAttention(nn.Module):
             outputs += (attn_weights,)
 
         return outputs
+
+    def get_rotary_embedding(self, n, device):
+        if self.pos_emb is not None and self.pos_emb.shape[-2] >= n:
+            return self.pos_emb[:n], self.pos_emb_scale[:n]
+
+        pos_emb, scale = self.rotary_emb(n, device=device)
+        self.register_buffer("pos_emb", pos_emb, persistent=False)
+        self.register_buffer("pos_emb_scale", scale, persistent=False)
+        return pos_emb, scale
 
     @classmethod
     def _split_heads(cls, tensor, num_attention_heads, attn_head_size):
@@ -233,6 +298,7 @@ def attention_mask_func(attention_scores, ltor_mask):
     return attention_scores
 
 
+"""
 class RotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, max_position_embeddings, base=10000, device=None):
         super().__init__()
@@ -260,23 +326,23 @@ class RotaryEmbedding(torch.nn.Module):
             self.cos_cached = emb.cos()[None, None, :, :]
             self.sin_cached = emb.sin()[None, None, :, :]
         return self.cos_cached[:seq_len, ...].to(x.device), self.sin_cached[:seq_len, ...].to(x.device)
+"""
+
+# def rotate_half(x):
+#     """Rotates half the hidden dims of the input."""
+#     x1 = x[..., : x.shape[-1] // 2]
+#     x2 = x[..., x.shape[-1] // 2 :]
+#     return torch.cat((-x2, x1), dim=-1)
 
 
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
-    gather_indices = position_ids[:, None, :, None]  # [bs, 1, seq_len, 1]
-    gather_indices = gather_indices.repeat(1, cos.shape[1], 1, cos.shape[3])
-    cos = torch.gather(cos.repeat(gather_indices.shape[0], 1, 1, 1), 2, gather_indices)
-    sin = torch.gather(sin.repeat(gather_indices.shape[0], 1, 1, 1), 2, gather_indices)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
+# def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
+#     gather_indices = position_ids[:, None, :, None]  # [bs, 1, seq_len, 1]
+#     gather_indices = gather_indices.repeat(1, cos.shape[1], 1, cos.shape[3])
+#     cos = torch.gather(cos.repeat(gather_indices.shape[0], 1, 1, 1), 2, gather_indices)
+#     sin = torch.gather(sin.repeat(gather_indices.shape[0], 1, 1, 1), 2, gather_indices)
+#     q_embed = (q * cos) + (rotate_half(q) * sin)
+#     k_embed = (k * cos) + (rotate_half(k) * sin)
+#     return q_embed, k_embed
 
 # Modified with SwiGLU
 class GPTNeoXMLP(nn.Module):
