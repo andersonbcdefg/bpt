@@ -5,7 +5,6 @@ import torch
 from torch.utils.checkpoint import checkpoint_sequential
 from torch import nn
 from torch.nn import functional as F
-from einops import rearrange
 from dataclasses import dataclass
 
 @dataclass
@@ -90,7 +89,7 @@ class RotaryEmbedding(nn.Module):
             return freqs, torch.ones(1, device = device)
 
         power = (t - (seq_len // 2)) / self.scale_base
-        scale = self.scale ** rearrange(power, 'n -> n 1')
+        scale = self.scale ** power.unsqueeze(-1)
         scale = torch.cat((scale, scale), dim = -1)
 
         return freqs, scale
@@ -103,6 +102,7 @@ class CausalAttention(nn.Module):
     self.dropout_p = config.dropout
     self.out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
     self.d_qkv = config.d_qkv
+    self.n_heads = config.n_heads
 
     self.register_buffer("pos_emb", None, persistent=False)
     self.register_buffer("pos_emb_scale", None, persistent=False)
@@ -118,12 +118,15 @@ class CausalAttention(nn.Module):
   
   def forward(self, x):
     seq_len, device = x.shape[1], X.device
-    Q, K, V = rearrange(self.W_qkv(x), "b l (h ddd) -> b h l ddd", ddd=(3 * self.d_qkv)).chunk(3, dim=-1) # b, h, l, d_attn
+    qkv = self.W_qkv(x) # b, l, d_qkv * n_heads * 3
+    new_qkv_shape = qkv.size()[:-1] + (self.n_heads, 3 * self.d_qkv) # b, l, h, d_qkv * 3
+    q, k, v = qkv.view(*new_qkv_shape).permute(0, 2, 1, 3).chunk(3, dim=-1)
+
     positions, scale = self.get_rotary_embedding(seq_len, device)
 
-    Q = apply_rotary_pos_emb(positions, Q, scale)
-    K = apply_rotary_pos_emb(positions, K, scale ** -1)
-    attn_out = F.scaled_dot_product_attention(Q, K, V, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
+    q = apply_rotary_pos_emb(positions, q, scale)
+    k = apply_rotary_pos_emb(positions, k, scale ** -1)
+    attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
     return self.out_proj(attn_out.flatten(2, 3))
 
 # use SwiGLU gated unit
@@ -177,15 +180,14 @@ class FusedParallelTransformerBlock(nn.Module):
     seq_len, device = x.shape[1], x.device
     normed = self.ln(x)
     # apply dense layer to x then split into q, k, v, a, b
-    q, k, v, a, b = self.dense(normed).split([
-      self.config.d_qkv * self.config.n_heads, 
-      self.config.d_qkv * self.config.n_heads, 
-      self.config.d_qkv * self.config.n_heads, 
+    qkv, a, b = self.dense(normed).split([
+      3 * self.config.d_qkv * self.config.n_heads,  
       self.config.d_ffn, 
       self.config.d_ffn
     ], dim=-1)
-    # split heads
-    q, k, v = map(lambda t: rearrange(t, "b l (h d) -> b h l d", h=self.config.n_heads), (q, k, v))
+    new_qkv_shape = qkv.size()[:-1] + (self.config.n_heads, 3 * self.config.d_qkv) # b, l, h, d_qkv * 3
+    q, k, v = qkv.view(*new_qkv_shape).permute(0, 2, 1, 3).chunk(3, dim=-1)
+
     # apply rotary embedding
     positions, scale = self.get_rotary_embedding(seq_len, device)
     q = apply_rotary_pos_emb(positions, q, scale)
@@ -251,9 +253,11 @@ class GPT(nn.Module):
   
 if __name__ == "__main__":
   config = GPTConfig.from_yaml("config/medium.yaml")
+  config.fused_transformer_block = True
   model = GPT(config)
   # print(model)
   X = torch.randint(0, config.vocab_size, (2, 128))
   loss = model(X, targets=X)
+  print(loss)
   loss.backward()
   print(model.token_emb.weight.grad)
