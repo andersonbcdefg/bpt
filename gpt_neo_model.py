@@ -21,7 +21,6 @@ import torch.utils.checkpoint
 from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
-from einops import rearrange
 import bitsandbytes as bnb
 from transformers import PreTrainedModel
 from transformers import GPTNeoXConfig
@@ -113,7 +112,7 @@ class RotaryEmbedding(nn.Module):
             return freqs, torch.ones(1, device = device)
 
         power = (t - (seq_len // 2)) / self.scale_base
-        scale = self.scale ** rearrange(power, 'n -> n 1')
+        scale = self.scale ** power.unsqueeze(-1)
         scale = torch.cat((scale, scale), dim = -1)
 
         return freqs, scale
