@@ -355,23 +355,6 @@ class GPTNeoXMLP(nn.Module):
         a, b = self.dense_h_to_4h(hidden_states).chunk(2, dim=-1)
         return self.dense_4h_to_h(a * F.silu(b))
 
-class RMSNorm(nn.Module):
-    """Root Mean Square Layer Normalization.
-    Derived from https://github.com/bzhangGo/rmsnorm/blob/master/rmsnorm_torch.py. BSD 3-Clause License:
-    https://github.com/bzhangGo/rmsnorm/blob/master/LICENSE.
-    """
-
-    def __init__(self, size: int, dim: int = -1, eps: float = 1e-5) -> None:
-        super().__init__()
-        self.scale = nn.Parameter(torch.ones(size))
-        self.eps = eps
-        self.dim = dim
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm_x = torch.mean(x * x, dim=self.dim, keepdim=True)
-        x_normed = x * torch.rsqrt(norm_x + self.eps)
-        return self.scale * x_normed
-
 class GPTNeoXLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
