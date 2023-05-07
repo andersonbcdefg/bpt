@@ -24,6 +24,7 @@ class GPTConfig:
   use_xpos: bool = True
   xpos_scale_base: int = 512
   stable_embedding: bool = False
+  checkpointing: bool = True
   
 
   def __post_init__(self):
@@ -210,6 +211,7 @@ class GPT(nn.Module):
     self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
     if config.tie_weights:
       self.lm_head.weight = self.token_emb.weight
+    self.checkpointing = config.checkpointing
 
     n_params = (sum(p.numel() for p in self.token_emb.parameters()) +
                     # self.pos_emb.numel() +
@@ -234,8 +236,11 @@ class GPT(nn.Module):
   def forward(self, x, targets=None):
     x = self.token_emb(x)
 
-    for _, layer in enumerate(self.transformer):
-      x = layer(x)
+    if self.checkpointing:
+      x = torch.utils.checkpoint.checkpoint_sequential(self.transformer, len(self.transformer), x)
+    else:
+      x = self.transformer(x)
+
     x = self.norm(x)
     logits = self.lm_head(x)
     if targets is not None:
