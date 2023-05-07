@@ -238,7 +238,7 @@ class GPT(nn.Module):
     x = self.token_emb(x)
 
     if self.checkpointing:
-      x = checkpoint_sequential(self.transformer, len(self.transformer), x)
+      x = checkpoint_sequential(self.transformer, len(self.transformer) // 2, x)
     else:
       x = self.transformer(x)
 
