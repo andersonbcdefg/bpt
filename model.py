@@ -2,6 +2,7 @@ import yaml
 import warnings
 import bitsandbytes as bnb
 import torch
+from torch.utils.checkpoint import checkpoint_sequential
 from torch import nn
 from torch.nn import functional as F
 from einops import rearrange
@@ -237,7 +238,7 @@ class GPT(nn.Module):
     x = self.token_emb(x)
 
     if self.checkpointing:
-      x = torch.utils.checkpoint.checkpoint_sequential(self.transformer, len(self.transformer), x)
+      x = checkpoint_sequential(self.transformer, len(self.transformer), x)
     else:
       x = self.transformer(x)
 
