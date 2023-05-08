@@ -60,7 +60,7 @@ class GPTNeoXPreTrainedModel(PreTrainedModel):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
         elif isinstance(module, RMSNorm):
-            module.scale.data.fill_(1.0)
+            module.g.data.fill_(1.0)
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, GPTNeoXModel):
@@ -133,7 +133,7 @@ class GPTNeoXAttention(nn.Module):
             ),
         )
         self.register_buffer("masked_bias", torch.tensor(-1e9))
-        self.rotary_emb = RotaryEmbedding(int(config.head_size * config.rotary_pct), scale_base=512, use_xpos=True)
+        self.rotary_emb = RotaryEmbedding(int(self.head_size * config.rotary_pct), scale_base=512, use_xpos=True)
         self.register_buffer(
             "norm_factor",
             torch.sqrt(torch.tensor(self.head_size, dtype=torch.float32)).to(torch.get_default_dtype()),
@@ -358,8 +358,8 @@ class GPTNeoXLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.use_parallel_residual = config.use_parallel_residual
-        self.input_layernorm = RMSNorm(config.hidden_size, dim=-1, eps=config.layer_norm_eps)
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, dim=-1, eps=config.layer_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.attention = GPTNeoXAttention(config)
         self.mlp = GPTNeoXMLP(config)
 
@@ -410,13 +410,14 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-
+        if "stable_embedding" not in self.config.__dict__:
+            self.config.stable_embedding = False
         if self.config.stable_embedding == True:
             self.embed_in = bnb.nn.StableEmbedding(config.vocab_size, config.hidden_size)
         else:
             self.embed_in = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([GPTNeoXLayer(config) for _ in range(config.num_hidden_layers)])
-        self.final_layer_norm = RMSNorm(config.hidden_size, dim=-1, eps=config.layer_norm_eps)
+        self.final_layer_norm = RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
 
         self.gradient_checkpointing = False
 
@@ -722,3 +723,13 @@ class GPTNeoXForCausalLM(GPTNeoXPreTrainedModel):
                 tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
             )
         return reordered_past
+    
+if __name__ == "__main__":
+  from transformers import AutoConfig
+  config = AutoConfig.from_pretrained("EleutherAI/pythia-1.4b-deduped")
+  model = GPTNeoXForCausalLM(config)
+  X = torch.randint(0, config.vocab_size, (2, 128))
+  loss = model(X, labels=X).loss
+  print(loss)
+  loss.backward()
+  print(model.gpt_neox.layers[0].mlp.dense_h_to_4h.weight.grad)

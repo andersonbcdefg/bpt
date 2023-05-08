@@ -236,7 +236,7 @@ class GPT(nn.Module):
     if isinstance(module, nn.Linear) and module.bias is not None and module.bias is not False:
       module.bias.data.zero_()
 
-  def forward(self, x, targets=None):
+  def forward(self, x, labels=None):
     x = self.token_emb(x)
 
     if self.checkpointing:
@@ -246,8 +246,8 @@ class GPT(nn.Module):
 
     x = self.norm(x)
     logits = self.lm_head(x)
-    if targets is not None:
-      loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100)
+    if labels is not None:
+      loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1), ignore_index=-100)
       return loss
     return logits 
   
