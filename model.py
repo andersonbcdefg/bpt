@@ -159,15 +159,19 @@ class FusedParallelTransformerBlock(nn.Module):
     self.config = config
     self.ln = RMSNorm(config.d_model)
     self.dense = nn.Linear(config.d_model, config.d_qkv * config.n_heads * 3 + config.d_ffn * 2, bias=False)
-    self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
+    if config.rotary_emb:
+      self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
+      self.register_buffer("pos_emb", None, persistent=False)
+      self.register_buffer("pos_emb_scale", None, persistent=False)
+    else:
+      self.rotary_emb = None
     self.dropout_p = config.dropout
     self.attn_out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
     self.ffn_out_proj = nn.Linear(config.d_ffn, config.d_model, bias=False)
 
-    self.register_buffer("pos_emb", None, persistent=False)
-    self.register_buffer("pos_emb_scale", None, persistent=False)
-
   def get_rotary_embedding(self, n, device):
+    if self.rotary_emb is None:
+      return
     if self.pos_emb is not None and self.pos_emb.shape[-2] >= n:
       return self.pos_emb[:n], self.pos_emb_scale[:n]
 
@@ -188,10 +192,11 @@ class FusedParallelTransformerBlock(nn.Module):
     new_qkv_shape = qkv.size()[:-1] + (self.config.n_heads, 3 * self.config.d_qkv) # b, l, h, d_qkv * 3
     q, k, v = qkv.view(*new_qkv_shape).permute(0, 2, 1, 3).chunk(3, dim=-1)
 
-    # apply rotary embedding
-    positions, scale = self.get_rotary_embedding(seq_len, device)
-    q = apply_rotary_pos_emb(positions, q, scale)
-    k = apply_rotary_pos_emb(positions, k, scale ** -1)
+    # apply rotary embedding, if applicable
+    if self.rotary_emb:
+      positions, scale = self.get_rotary_embedding(seq_len, device)
+      q = apply_rotary_pos_emb(positions, q, scale)
+      k = apply_rotary_pos_emb(positions, k, scale ** -1)
     # apply attention
     attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
     
