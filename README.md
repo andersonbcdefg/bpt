@@ -1,5 +1,5 @@
-# GPT Implementation in PyTorch
-This repository contains my implementation a GPT-like model in PyTorch, which I am working on as a personal project to familiarize myself with recent advances in deep learning. As of now, I have trained the model on a toy task (adding numbers), but will soon attempt to train it on text corpora (e.g. the complete works of Shakespeare, Wikitext, Webtext). I am also planning to implement Byte-Pair Encoding (BPE) from scratch.
+# BPT – Ben's Pretrained Transformer ✨
+This repository contains my implementation an autoregressive transformer language model in PyTorch, which I am working on as a personal project to familiarize myself with recent advances in deep learning. Because I'm making my own model from scratch, I was empowered to pick all my favorite transformer bells and whistles, which are detailed below. So far, I've been experimenting by training a 1.3B variant of this model on Jean Kaddour's [MiniPile](https://arxiv.org/abs/2304.08442), which contains ~1.5B tokens from The Pile. Rumor has it this dataset is not the best, but it's a convenient size for experiments! Once I've figured out a training setup I'm happy with, I'll train it on something bigger, like C4 or OpenWebText.
 
 # References
 
