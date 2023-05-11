@@ -55,68 +55,6 @@ class RotaryEmbedding(nn.Module):
         scale = torch.cat((scale, scale), dim = -1)
 
         return freqs, scale
-
-class CausalAttention(nn.Module):
-  def __init__(self, config):
-    super().__init__()
-    self.W_qkv = nn.Linear(config.d_model, config.n_heads * config.d_qkv * 3, bias=False)
-    self.dropout_p = config.dropout
-    self.out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
-    self.d_qkv = config.d_qkv
-    self.n_heads = config.n_heads
-
-    if config.rotary_emb:
-      self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
-      self.register_buffer("pos_emb", None, persistent=False)
-      self.register_buffer("pos_emb_scale", None, persistent=False)
-    else:
-      self.rotary_emb = None
-
-  def get_rotary_embedding(self, n, device):
-    if self.pos_emb is not None and self.pos_emb.shape[-2] >= n:
-      return self.pos_emb[:n], self.pos_emb_scale[:n]
-
-    pos_emb, scale = self.rotary_emb(n, device=device)
-    self.register_buffer("pos_emb", pos_emb, persistent=False)
-    self.register_buffer("pos_emb_scale", scale, persistent=False)
-    return pos_emb, scale
-  
-  def forward(self, x):
-    seq_len, device = x.shape[1], x.device
-    qkv = self.W_qkv(x) # b, l, d_qkv * n_heads * 3
-    new_qkv_shape = qkv.size()[:-1] + (self.n_heads, 3 * self.d_qkv) # b, l, h, d_qkv * 3
-    q, k, v = qkv.view(*new_qkv_shape).permute(0, 2, 1, 3).chunk(3, dim=-1)
-
-    if self.rotary_emb:
-      positions, scale = self.get_rotary_embedding(seq_len, device)
-      q = apply_rotary_pos_emb(positions, q, scale)
-      k = apply_rotary_pos_emb(positions, k, scale ** -1)
-    attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
-    return self.out_proj(attn_out.flatten(2, 3))
-
-# use SwiGLU gated unit
-class FFN(nn.Module):
-  def __init__(self, config):
-    super().__init__()
-    self.fc1 = nn.Linear(config.d_model, config.d_ffn * 2, bias=False)
-    self.fc2 = nn.Linear(config.d_ffn, config.d_model, bias=False)
-
-  def forward(self, X):
-    a, b = self.fc1(X).chunk(2, dim=-1)
-    return self.fc2(a * F.silu(b))
-
-class ParallelTransformerBlock(nn.Module):
-  def __init__(self, config):
-    super().__init__()
-    self.ln1 = RMSNorm(config.d_model)
-    self.attn = CausalAttention(config)
-    self.ln2 = RMSNorm(config.d_model)
-    self.ffn = FFN(config)
-
-  def forward(self, x):
-    attn_out = self.attn(self.ln1(x))
-    ffn_out = self.ffn(self.ln2(x))
-    return x + attn_out + ffn_out
   
 class FusedParallelTransformerBlock(nn.Module):
   def __init__(self, config):
