@@ -5,42 +5,6 @@ import torch
 from torch.utils.checkpoint import checkpoint_sequential
 from torch import nn
 from torch.nn import functional as F
-from dataclasses import dataclass
-
-@dataclass
-class GPTConfig:
-  vocab_size: int
-  seq_len: int
-  d_model: int
-  d_ffn: int
-  d_qkv: int
-  n_heads: int
-  n_layers: int
-  dropout: float
-  tie_weights: bool
-  fused_transformer_block: bool = True
-  rotary_emb: bool = True
-  rotary_pct: float = 0.25
-  use_xpos: bool = True
-  xpos_scale_base: int = 512
-  stable_embedding: bool = False
-  checkpointing: bool = True
-  
-
-  def __post_init__(self):
-    if self.d_qkv != self.d_model // self.n_heads:
-      warnings.warn("d_qkv is not equal to d_model // n_heads. This is ok, but unusual.")
-
-  @classmethod
-  def from_yaml(cls, path):
-    with open(path, 'r') as f:
-      return cls(**yaml.safe_load(f))
-
-  def __repr__(self):
-    return yaml.dump(self.__dict__)
-
-  def __str__(self):
-    return yaml.dump(self.__dict__)
 
 class RMSNorm(nn.Module):
   def __init__(self, dim, eps = 1e-8):
@@ -55,8 +19,6 @@ class RMSNorm(nn.Module):
 
 ## Rotary embedding adapted from Phil Wang (lucidrains) Github repo `palm_rlhf_pytorch`.
 # I modify the apply_rotary_pos_emb function to allow rotating only a fraction of the input tensor.
-
-
 @torch.jit.script
 def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
@@ -98,14 +60,17 @@ class CausalAttention(nn.Module):
   def __init__(self, config):
     super().__init__()
     self.W_qkv = nn.Linear(config.d_model, config.n_heads * config.d_qkv * 3, bias=False)
-    self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
     self.dropout_p = config.dropout
     self.out_proj = nn.Linear(config.d_qkv * config.n_heads, config.d_model, bias=False)
     self.d_qkv = config.d_qkv
     self.n_heads = config.n_heads
 
-    self.register_buffer("pos_emb", None, persistent=False)
-    self.register_buffer("pos_emb_scale", None, persistent=False)
+    if config.rotary_emb:
+      self.rotary_emb = RotaryEmbedding(int(config.d_qkv * config.rotary_pct), scale_base=config.xpos_scale_base, use_xpos=config.use_xpos)
+      self.register_buffer("pos_emb", None, persistent=False)
+      self.register_buffer("pos_emb_scale", None, persistent=False)
+    else:
+      self.rotary_emb = None
 
   def get_rotary_embedding(self, n, device):
     if self.pos_emb is not None and self.pos_emb.shape[-2] >= n:
@@ -117,15 +82,15 @@ class CausalAttention(nn.Module):
     return pos_emb, scale
   
   def forward(self, x):
-    seq_len, device = x.shape[1], X.device
+    seq_len, device = x.shape[1], x.device
     qkv = self.W_qkv(x) # b, l, d_qkv * n_heads * 3
     new_qkv_shape = qkv.size()[:-1] + (self.n_heads, 3 * self.d_qkv) # b, l, h, d_qkv * 3
     q, k, v = qkv.view(*new_qkv_shape).permute(0, 2, 1, 3).chunk(3, dim=-1)
 
-    positions, scale = self.get_rotary_embedding(seq_len, device)
-
-    q = apply_rotary_pos_emb(positions, q, scale)
-    k = apply_rotary_pos_emb(positions, k, scale ** -1)
+    if self.rotary_emb:
+      positions, scale = self.get_rotary_embedding(seq_len, device)
+      q = apply_rotary_pos_emb(positions, q, scale)
+      k = apply_rotary_pos_emb(positions, k, scale ** -1)
     attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout_p, is_causal=True).transpose(1, 2) # b, l, h, d_attn
     return self.out_proj(attn_out.flatten(2, 3))
 

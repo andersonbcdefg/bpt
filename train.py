@@ -36,6 +36,7 @@ def train(
     tokenizer_path="EleutherAI/pythia-1.4b",
     train_dataset="andersonbcdefg/minipile_train_tokenized",
     val_dataset="andersonbcdefg/minipile_val_tokenized",
+    pre_tokenized=True,
     max_batch_size = 2048,
     micro_batch_size = 32,
     initial_batch_size = 256,
@@ -48,8 +49,9 @@ def train(
     anneal_strategy = "linear", # "cosine" is the other option
     optim_8bit = False,
     precision="bf16",
-    grad_clip = None
-
+    grad_clip = None,
+    save_every = 10000,
+    ckpt_dir = "/storage"
 ):
     # make it so that we specify either my GPT or gpt_neox in the config and load accordingly
     config = GPTConfig.from_yaml(config_path)
@@ -57,17 +59,22 @@ def train(
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     tokenizer.pad_token = tokenizer.eos_token
 
-    minipile_train = load_dataset("andersonbcdefg/minipile_train_tokenized", split="train")
-    minipile_train.set_format("pt")
-    minipile_val = load_dataset("andersonbcdefg/minipile_val_tokenized", split="validation")
-    minipile_val.set_format("pt")
+    train_dataset = load_dataset("andersonbcdefg/minipile_train_tokenized", split="train")
+    train_dataset.set_format("pt")
+    if val_dataset is not None:
+        val_dataset = load_dataset("andersonbcdefg/minipile_val_tokenized", split="validation")
+        val_dataset.set_format("pt")
+    
+    if not pre_tokenized:
+        train_dataset = train_dataset.map(get_tokenize_fn(tokenizer, config.seq_len), batched=True, remove_columns=train_dataset.column_names)
+        if val_dataset is not None:
+            val_dataset = val_dataset.map(get_tokenize_fn(tokenizer, config.seq_len), batched=True, remove_columns=val_dataset.column_names)
 
-    train_dataloader = torch.utils.data.DataLoader(minipile_train, batch_size=micro_batch_size, shuffle=True, num_workers=4, pin_memory=True) #, collate_fn=collate_fn)
-    val_dataloader = torch.utils.data.DataLoader(minipile_val, batch_size=micro_batch_size, shuffle=False) #, collate_fn=collate_fn)
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=micro_batch_size, shuffle=True, num_workers=4, pin_memory=True) #, collate_fn=collate_fn)
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=micro_batch_size, shuffle=False) #, collate_fn=collate_fn)
 
     # Model, optimizer, scheduler
     model.to(torch.device("cuda"))
-    max_lr = 3.0e-4
     if optim_8bit:
         if config.stable_embedding == False:
             warnings.warn("You are using 8-bit AdamW but stable embedding is not enabled. This is not recommended.")
@@ -149,13 +156,14 @@ def train(
                 "optimizer_steps": optimizer_steps
             })
             # take 16 steps at each effective batch size before increasing it (to speed initial learning)
-            if gradient_accumulation_steps < (max_batch_size // micro_batch_size) and optimizer_steps % 16 == 0:
+            if gradient_accumulation_steps < (max_batch_size // micro_batch_size) and optimizer_steps % steps_per_batch_size == 0:
                 gradient_accumulation_steps += 1
         
         if (index + 1) % save_every == 0:
             print("Saving checkpoint...")
-            accelerator.save_state("/storage")
+            accelerator.save_state(ckpt_dir)
         
         scheduler.step()    
     
-
+if __name__ == "__main__":
+    fire.Fire(train)
