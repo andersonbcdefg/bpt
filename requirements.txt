@@ -1,0 +1,8 @@
+torch
+datasets
+huggingface-hub
+accelerate
+einops
+bitsandbytes==0.37.2
+wandb
+pynvml
