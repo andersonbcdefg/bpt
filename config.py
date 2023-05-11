@@ -13,7 +13,6 @@ class GPTConfig:
   n_layers: int
   dropout: float
   tie_weights: bool
-  fused_transformer_block: bool = True
   rotary_emb: bool = True
   rotary_pct: float = 0.25
   use_xpos: bool = True

@@ -8,7 +8,6 @@ n_heads: 16
 n_layers: 24
 dropout: 0.0
 tie_weights: True # might not play nice with torch.compile but who cares
-fused_transformer_block: True
 rotary_emb: True
 rotary_pct: 0.25
 use_xpos: True

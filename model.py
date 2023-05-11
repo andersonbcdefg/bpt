@@ -114,10 +114,7 @@ class GPT(nn.Module):
       self.token_emb = bnb.nn.StableEmbedding(config.vocab_size, config.d_model)
     else:
       self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
-    if config.fused_transformer_block:
-      self.transformer = nn.Sequential(*[FusedParallelTransformerBlock(config) for _ in range(config.n_layers)])
-    else:
-      self.transformer = nn.Sequential(*[ParallelTransformerBlock(config) for _ in range(config.n_layers)])
+    self.transformer = nn.Sequential(*[FusedParallelTransformerBlock(config) for _ in range(config.n_layers)])
     self.norm = RMSNorm(config.d_model)
     self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
     if config.tie_weights:

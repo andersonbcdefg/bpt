@@ -6,7 +6,7 @@ import torch
 import bitsandbytes as bnb
 from model import GPT, GPTConfig
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoConfig, DataCollatorForLanguageModeling
+from transformers import AutoTokenizer #, AutoConfig, DataCollatorForLanguageModeling
 from transformers.modeling_outputs import CausalLMOutputWithPast
 import wandb
 from accelerate import Accelerator
