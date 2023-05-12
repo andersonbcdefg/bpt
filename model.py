@@ -2,7 +2,7 @@ import yaml
 import warnings
 import bitsandbytes as bnb
 import torch
-from config import GPTConfig
+from .config import GPTConfig
 from torch.utils.checkpoint import checkpoint_sequential
 from torch import nn
 from torch.nn import functional as F
