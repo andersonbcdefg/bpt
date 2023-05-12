@@ -2,6 +2,7 @@ import yaml
 import warnings
 import bitsandbytes as bnb
 import torch
+from config import GPTConfig
 from torch.utils.checkpoint import checkpoint_sequential
 from torch import nn
 from torch.nn import functional as F
@@ -157,12 +158,12 @@ class GPT(nn.Module):
     return logits 
   
 if __name__ == "__main__":
-  config = GPTConfig.from_yaml("config/medium.yaml")
+  config = GPTConfig.from_yaml("config/125m-default.yaml")
   config.fused_transformer_block = True
   model = GPT(config)
   # print(model)
   X = torch.randint(0, config.vocab_size, (2, 128))
-  loss = model(X, targets=X)
+  loss = model(X, labels=X)
   print(loss)
   loss.backward()
   print(model.token_emb.weight.grad)
