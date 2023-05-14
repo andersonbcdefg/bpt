@@ -1,6 +1,6 @@
 import bitsandbytes as bnb
 import torch
-from .config import GPTConfig
+import config
 from torch.utils.checkpoint import checkpoint_sequential
 from torch import nn
 from torch.nn import functional as F
@@ -156,8 +156,7 @@ class GPT(nn.Module):
     return logits 
   
 if __name__ == "__main__":
-  config = GPTConfig.from_yaml("config/125m-default.yaml")
-  config.fused_transformer_block = True
+  config = config.GPTConfig.from_yaml("config/3b-default.yaml")
   model = GPT(config)
   # print(model)
   X = torch.randint(0, config.vocab_size, (2, 128))

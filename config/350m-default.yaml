@@ -1,0 +1,17 @@
+# ~150M
+vocab_size: 50304 # 50432 didn't work
+seq_len: 512
+d_model: 1024
+d_ffn: 2560 # smaller than 4x because of GLU
+d_qkv: 64
+n_heads: 16
+n_layers: 24
+dropout: 0.0
+tie_weights: True # might not play nice with torch.compile but who cares
+rotary_emb: False
+rotary_pct: None
+use_xpos: False
+xpos_scale_base: None
+stable_embedding: False
+
+  

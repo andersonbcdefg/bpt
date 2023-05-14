@@ -5,7 +5,7 @@ import torch
 import bitsandbytes as bnb
 from .model import GPT
 from .config import GPTConfig
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 from transformers import AutoTokenizer #, AutoConfig, DataCollatorForLanguageModeling
 from transformers.modeling_outputs import CausalLMOutputWithPast
 import wandb
@@ -62,7 +62,10 @@ def train(
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     tokenizer.pad_token = tokenizer.eos_token
 
-    train_dataset = load_dataset(train_dataset, split="train")
+    if isinstance(train_dataset, str):
+        train_dataset = load_dataset(train_dataset, split="train")
+    elif isinstance(train_dataset, list):
+        train_dataset = concatenate_datasets([load_dataset(dataset, split="train") for dataset in train_dataset])
     train_dataset.set_format("pt")
     if val_dataset is not None:
         try:
@@ -128,7 +131,7 @@ def train(
     micro_batches = 0
     optimizer_steps = 0
     model.train()
-    
+    print("Training begins!")
     for index, batch in enumerate(train_dataloader):
         input_ids, labels = batch["input_ids"], batch["targets"]
         if micro_batches < gradient_accumulation_steps - 1:
@@ -178,6 +181,8 @@ def train(
             print(f"Step {index + 1} | Loss: {micro_batch_loss.item()}")
         
         scheduler.step()    
-    
+    print("Finished--saving final checkpoint.")
+    accelerator.save_state(ckpt_dir)
+
 if __name__ == "__main__":
     fire.Fire(train)
