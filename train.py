@@ -1,10 +1,10 @@
-import os
 import fire
 import warnings
 import numpy as np
 import torch
 import bitsandbytes as bnb
-from model import GPT, GPTConfig
+from .model import GPT
+from .config import GPTConfig
 from datasets import load_dataset
 from transformers import AutoTokenizer #, AutoConfig, DataCollatorForLanguageModeling
 from transformers.modeling_outputs import CausalLMOutputWithPast
