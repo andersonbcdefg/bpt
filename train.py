@@ -51,6 +51,7 @@ def train(
     precision="bf16",
     grad_clip = None,
     save_every = 10000,
+    print_every = 100,
     ckpt_dir = "/storage"
 ):
     # make it so that we specify either my GPT or gpt_neox in the config and load accordingly
@@ -59,11 +60,15 @@ def train(
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     tokenizer.pad_token = tokenizer.eos_token
 
-    train_dataset = load_dataset("andersonbcdefg/minipile_train_tokenized", split="train")
+    train_dataset = load_dataset(train_dataset, split="train")
     train_dataset.set_format("pt")
     if val_dataset is not None:
-        val_dataset = load_dataset("andersonbcdefg/minipile_val_tokenized", split="validation")
-        val_dataset.set_format("pt")
+        try:
+            val_dataset = load_dataset(val_dataset, split="validation")
+            val_dataset.set_format("pt")
+        except:
+            val_dataset = load_dataset(val_dataset, split="validation")
+            val_dataset.set_format("pt")
     
     if not pre_tokenized:
         train_dataset = train_dataset.map(get_tokenize_fn(tokenizer, config.seq_len), batched=True, remove_columns=train_dataset.column_names)
@@ -71,7 +76,7 @@ def train(
             val_dataset = val_dataset.map(get_tokenize_fn(tokenizer, config.seq_len), batched=True, remove_columns=val_dataset.column_names)
 
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=micro_batch_size, shuffle=True, num_workers=4, pin_memory=True) #, collate_fn=collate_fn)
-    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=micro_batch_size, shuffle=False) #, collate_fn=collate_fn)
+    # val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=micro_batch_size, shuffle=False) #, collate_fn=collate_fn)
 
     # Model, optimizer, scheduler
     model.to(torch.device("cuda"))
@@ -155,13 +160,16 @@ def train(
                 "tokens": index * 512 * micro_batch_size,
                 "optimizer_steps": optimizer_steps
             })
-            # take 16 steps at each effective batch size before increasing it (to speed initial learning)
+            # take steps_per_batch_size steps at each effective batch size before increasing it (to speed initial learning)
             if gradient_accumulation_steps < (max_batch_size // micro_batch_size) and optimizer_steps % steps_per_batch_size == 0:
                 gradient_accumulation_steps += 1
         
         if (index + 1) % save_every == 0:
             print("Saving checkpoint...")
             accelerator.save_state(ckpt_dir)
+
+        if (index + 1) % print_every == 0:
+            print(f"Step {index + 1} | Loss: {micro_batch_loss.item()}")
         
         scheduler.step()    
     
