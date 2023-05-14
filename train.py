@@ -34,6 +34,7 @@ def get_tokenize_fn(tokenizer, seq_len):
 def train(
     config_path="config/1b-default.yaml",
     tokenizer_path="EleutherAI/pythia-1.4b",
+    wandb_project="train_gpt_1.4b",
     train_dataset="andersonbcdefg/minipile_train_tokenized",
     val_dataset="andersonbcdefg/minipile_val_tokenized",
     pre_tokenized=True,
@@ -98,7 +99,7 @@ def train(
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, **scheduler_kwargs)
 
     wandb.init(
-        project="train_gpt_1.4b",
+        project=wandb_project,
         config={
             "model": config.__dict__,
             "max_lr": max_lr,
